@@ -4,3 +4,7 @@ Cargo.lock
 *.a
 lex.yy.c
 lex.yy.rs
+bin/
+libl.a
+libl.o
+lex.yy.c
