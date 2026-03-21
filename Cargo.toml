@@ -1,0 +1,11 @@
+[workspace]
+members = ["ft_lex", "ft_lex_lib"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["dlesieur"]
+
+[workspace.dependencies]
+ft_lex_lib = { path = "./ft_lex_lib" }

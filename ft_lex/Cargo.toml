@@ -1,0 +1,12 @@
+[package]
+name = "ft_lex"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ft_lex"
+path = "src/main.rs"
+
+[dependencies]
+ft_lex_lib.workspace = true

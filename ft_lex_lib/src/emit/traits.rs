@@ -1,0 +1,1 @@
+// CodeEmitter trait — stub

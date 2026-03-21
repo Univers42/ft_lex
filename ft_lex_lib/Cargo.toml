@@ -1,0 +1,7 @@
+[package]
+name = "ft_lex_lib"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
