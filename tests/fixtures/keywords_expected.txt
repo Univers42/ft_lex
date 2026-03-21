@@ -1,0 +1,8 @@
+KW_IF
+ID: x
+KW_ELSE
+KW_WHILE
+ID: y
+KW_RETURN
+ID: z
+ID: iffy

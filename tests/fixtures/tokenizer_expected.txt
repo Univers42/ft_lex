@@ -1,0 +1,13 @@
+ID: x
+ASSIGN
+NUM: 42
+SEMI
+ID: y
+ASSIGN
+FLOAT: 3.14
+SEMI
+ID: if
+ID: x
+EQ
+ID: y
+SEMI
