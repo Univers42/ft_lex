@@ -2,6 +2,7 @@ use std::fmt::Write as FmtWrite;
 
 use crate::automata::arena::NodeId;
 use crate::automata::dfa::Dfa;
+use crate::compress::equiv_classes::{compress_dfa, CompressedDfa};
 use crate::error::LexError;
 use crate::lex_file::parser::LexFile;
 
@@ -11,11 +12,23 @@ use super::traits::CodeEmitter;
 pub struct CEmitter {
     /// Whether to suppress the default rule (echo unmatched chars).
     pub suppress_default: bool,
+    /// Whether to use equivalence-class compression.
+    pub compress: bool,
 }
 
 impl CEmitter {
     pub fn new(suppress_default: bool) -> Self {
-        Self { suppress_default }
+        Self {
+            suppress_default,
+            compress: false,
+        }
+    }
+
+    pub fn with_compression(suppress_default: bool) -> Self {
+        Self {
+            suppress_default,
+            compress: true,
+        }
     }
 
     /// Format the DFA transition table as a C static array.
@@ -62,7 +75,57 @@ impl CEmitter {
         writeln!(out).unwrap();
         writeln!(out, "}};").unwrap();
     }
-}
+    /// Emit the equivalence class mapping table.
+    fn emit_ec_table(out: &mut String, cdfa: &CompressedDfa) {
+        writeln!(out, "static unsigned char yy_ec[256] = {{").unwrap();
+        write!(out, "  ").unwrap();
+        for i in 0..256 {
+            if i > 0 {
+                write!(out, ",").unwrap();
+            }
+            if i > 0 && i % 16 == 0 {
+                write!(out, "\n  ").unwrap();
+            }
+            write!(out, "{}", cdfa.ec.class_of[i]).unwrap();
+        }
+        writeln!(out).unwrap();
+        writeln!(out, "}};\n").unwrap();
+    }
+
+    /// Emit the compressed transition table.
+    fn emit_compressed_transition_table(out: &mut String, cdfa: &CompressedDfa) {
+        let nc = cdfa.ec.num_classes;
+        writeln!(out, "static int yy_transition[{}][{}] = {{", cdfa.num_states, nc).unwrap();
+        for s in 0..cdfa.num_states {
+            write!(out, "  {{").unwrap();
+            for c in 0..nc {
+                if c > 0 {
+                    write!(out, ",").unwrap();
+                }
+                write!(out, "{}", cdfa.transitions[s * nc + c]).unwrap();
+            }
+            if s + 1 < cdfa.num_states {
+                writeln!(out, "}},").unwrap();
+            } else {
+                writeln!(out, "}}").unwrap();
+            }
+        }
+        writeln!(out, "}};\n").unwrap();
+    }
+
+    /// Emit the compressed accept table.
+    fn emit_compressed_accept_table(out: &mut String, cdfa: &CompressedDfa) {
+        writeln!(out, "static int yy_accept[{}] = {{", cdfa.num_states).unwrap();
+        write!(out, "  ").unwrap();
+        for i in 0..cdfa.num_states {
+            if i > 0 {
+                write!(out, ", ").unwrap();
+            }
+            write!(out, "{}", cdfa.accept[i]).unwrap();
+        }
+        writeln!(out).unwrap();
+        writeln!(out, "}};\n").unwrap();
+    }}
 
 impl CodeEmitter for CEmitter {
     fn emit(&self, lex_file: &LexFile, dfa: &Dfa) -> Result<String, LexError> {
@@ -82,14 +145,27 @@ impl CodeEmitter for CEmitter {
             writeln!(out).unwrap();
         }
 
-        // 3. DFA tables
+        // 3. DFA tables (compressed or full)
+        let cdfa_opt = if self.compress {
+            Some(compress_dfa(dfa))
+        } else {
+            None
+        };
+
         let num_states = dfa.state_count();
         writeln!(out, "#define YY_NUM_STATES {}", num_states).unwrap();
         writeln!(out, "#define YY_START_STATE {}", dfa.start.0).unwrap();
         writeln!(out).unwrap();
-        Self::emit_transition_table(&mut out, dfa);
-        writeln!(out).unwrap();
-        Self::emit_accept_table(&mut out, dfa);
+
+        if let Some(ref cdfa) = cdfa_opt {
+            Self::emit_ec_table(&mut out, cdfa);
+            Self::emit_compressed_transition_table(&mut out, cdfa);
+            Self::emit_compressed_accept_table(&mut out, cdfa);
+        } else {
+            Self::emit_transition_table(&mut out, dfa);
+            writeln!(out).unwrap();
+            Self::emit_accept_table(&mut out, dfa);
+        }
         writeln!(out).unwrap();
 
         // 4. Globals
@@ -152,7 +228,11 @@ impl CodeEmitter for CEmitter {
         writeln!(out).unwrap();
         writeln!(out, "        while (yy_buf_pos < yy_buf_len) {{").unwrap();
         writeln!(out, "            yy_c = (unsigned char)yy_buf[yy_buf_pos];").unwrap();
-        writeln!(out, "            yy_state = yy_transition[yy_state][yy_c];").unwrap();
+        if self.compress {
+            writeln!(out, "            yy_state = yy_transition[yy_state][yy_ec[yy_c]];").unwrap();
+        } else {
+            writeln!(out, "            yy_state = yy_transition[yy_state][yy_c];").unwrap();
+        }
         writeln!(out, "            if (yy_state == -1) break;").unwrap();
         writeln!(out, "            yy_buf_pos++;").unwrap();
         writeln!(out, "            if (yy_accept[yy_state] > 0) {{").unwrap();
@@ -342,5 +422,54 @@ mod tests {
         let output = build_output(source, false);
         // Empty action (;) => just break
         assert!(output.contains("case 1:"));
+    }
+
+    // --- Compression tests ---
+
+    fn build_compressed_output(l_source: &str) -> String {
+        let lex_file = LexFile::parse(l_source, "<test>").unwrap();
+        let mut builder = NfaBuilder::new();
+        let rules: Vec<_> = lex_file
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.regex.clone(), i))
+            .collect();
+        let nfa = builder.build_combined(&rules);
+        let dfa = subset_construction(&nfa);
+        let min_dfa = minimize_dfa(&dfa);
+
+        let emitter = CEmitter::with_compression(false);
+        emitter.emit(&lex_file, &min_dfa).unwrap()
+    }
+
+    #[test]
+    fn test_compressed_emitter_has_ec_table() {
+        let output = build_compressed_output("%%\n[0-9]+  ;\n");
+        assert!(output.contains("yy_ec[256]"));
+        assert!(output.contains("yy_ec[yy_c]"));
+    }
+
+    #[test]
+    fn test_compressed_emitter_smaller_table() {
+        let src = "%%\n[0-9]+  ;\n[a-z]+  ;\n";
+        let normal = build_output(src, false);
+        let compressed = build_compressed_output(src);
+        // Compressed output should be shorter (smaller tables)
+        assert!(
+            compressed.len() < normal.len(),
+            "compressed ({}) should be smaller than normal ({})",
+            compressed.len(),
+            normal.len()
+        );
+    }
+
+    #[test]
+    fn test_compressed_emitter_has_all_sections() {
+        let output = build_compressed_output("%%\n.  ;\n");
+        assert!(output.contains("#include <stdio.h>"));
+        assert!(output.contains("yylex"));
+        assert!(output.contains("yy_transition"));
+        assert!(output.contains("yy_accept"));
     }
 }

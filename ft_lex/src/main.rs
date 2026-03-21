@@ -5,22 +5,33 @@ use ft_lex_lib::automata::dfa::subset_construction;
 use ft_lex_lib::automata::minimize::minimize_dfa;
 use ft_lex_lib::automata::nfa::NfaBuilder;
 use ft_lex_lib::emit::c_emitter::CEmitter;
+use ft_lex_lib::emit::rust_emitter::RustEmitter;
 use ft_lex_lib::emit::traits::CodeEmitter;
 use ft_lex_lib::lex_file::parser::LexFile;
+
+#[derive(Clone, Copy, PartialEq)]
+enum TargetLang {
+    C,
+    Rust,
+}
 
 struct Options {
     to_stdout: bool,
     suppress_default: bool,
     verbose: bool,
+    compress: bool,
+    lang: TargetLang,
     input_file: String,
 }
 
 fn print_usage() {
-    eprintln!("Usage: ft_lex [-t] [-n] [-v] [-e] [file.l]");
-    eprintln!("  -t    Write output to stdout instead of lex.yy.c");
-    eprintln!("  -n    Suppress the default rule");
-    eprintln!("  -v    Write statistics to stderr");
-    eprintln!("  -e    Use extended (8-bit) mode");
+    eprintln!("Usage: ft_lex [-t] [-n] [-v] [-e] [--compress] [--lang c|rust] [file.l]");
+    eprintln!("  -t           Write output to stdout instead of lex.yy.c / lex.yy.rs");
+    eprintln!("  -n           Suppress the default rule");
+    eprintln!("  -v           Write statistics to stderr");
+    eprintln!("  -e           Use extended (8-bit) mode");
+    eprintln!("  --compress   Compress DFA tables using equivalence classes");
+    eprintln!("  --lang LANG  Target language: c (default) or rust");
 }
 
 fn parse_args(args: &[String]) -> Result<Options, String> {
@@ -28,11 +39,29 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
         to_stdout: false,
         suppress_default: false,
         verbose: false,
+        compress: false,
+        lang: TargetLang::C,
         input_file: String::new(),
     };
 
-    for arg in args {
-        if arg.starts_with('-') && arg.len() > 1 {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--compress" {
+            opts.compress = true;
+        } else if arg == "--lang" {
+            i += 1;
+            if i >= args.len() {
+                return Err("--lang requires an argument (c or rust)".to_string());
+            }
+            match args[i].as_str() {
+                "c" | "C" => opts.lang = TargetLang::C,
+                "rust" | "rs" | "Rust" => opts.lang = TargetLang::Rust,
+                other => return Err(format!("unknown language: {}", other)),
+            }
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown option: {}", arg));
+        } else if arg.starts_with('-') && arg.len() > 1 {
             for ch in arg[1..].chars() {
                 match ch {
                     't' => opts.to_stdout = true,
@@ -47,6 +76,7 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
         } else {
             return Err("too many input files".to_string());
         }
+        i += 1;
     }
 
     if opts.input_file.is_empty() {
@@ -93,19 +123,33 @@ fn run(opts: &Options) -> Result<(), String> {
             dfa.state_count(),
             min_dfa.state_count(),
         );
+        if opts.compress {
+            eprintln!("ft_lex: compression enabled (equivalence classes)");
+        }
+        eprintln!("ft_lex: target language: {}",
+            match opts.lang { TargetLang::C => "C", TargetLang::Rust => "Rust" });
     }
 
-    // 7. Emit C code
-    let emitter = CEmitter::new(opts.suppress_default);
+    // 7. Emit code
+    let emitter: Box<dyn CodeEmitter> = match (opts.lang, opts.compress) {
+        (TargetLang::C, false) => Box::new(CEmitter::new(opts.suppress_default)),
+        (TargetLang::C, true) => Box::new(CEmitter::with_compression(opts.suppress_default)),
+        (TargetLang::Rust, false) => Box::new(RustEmitter::new(opts.suppress_default)),
+        (TargetLang::Rust, true) => Box::new(RustEmitter::with_compression(opts.suppress_default)),
+    };
     let output = emitter.emit(&lex_file, &min_dfa)
         .map_err(|e| e.to_string())?;
 
     // 8. Write output
+    let out_file = match opts.lang {
+        TargetLang::C => "lex.yy.c",
+        TargetLang::Rust => "lex.yy.rs",
+    };
     if opts.to_stdout {
         print!("{}", output);
     } else {
-        fs::write("lex.yy.c", &output)
-            .map_err(|e| format!("lex.yy.c: {}", e))?;
+        fs::write(out_file, &output)
+            .map_err(|e| format!("{}: {}", out_file, e))?;
     }
 
     Ok(())
