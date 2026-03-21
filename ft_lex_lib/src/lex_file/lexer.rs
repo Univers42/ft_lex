@@ -95,7 +95,37 @@ pub fn parse_l_file(input: &str, filename: &str) -> Result<RawLexFile, LexError>
 
                 // Empty / comment line
                 let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with("/*") {
+                if trimmed.is_empty() {
+                    i += 1;
+                    continue;
+                }
+
+                // C-style multi-line comments
+                if trimmed.starts_with("/*") {
+                    if !trimmed.contains("*/") {
+                        // Multi-line comment — skip until */
+                        i += 1;
+                        while i < lines.len() {
+                            if lines[i].contains("*/") {
+                                break;
+                            }
+                            i += 1;
+                        }
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                // C++ style comments 
+                if trimmed.starts_with("//") {
+                    i += 1;
+                    continue;
+                }
+
+                // POSIX: Lines starting with whitespace in definitions section
+                // are copied verbatim to the output (indented code).
+                if line.starts_with(' ') || line.starts_with('\t') {
+                    result.header_code.push(format!("{}\n", line));
                     i += 1;
                     continue;
                 }

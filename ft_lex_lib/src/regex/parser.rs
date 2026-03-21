@@ -380,9 +380,10 @@ impl<'a> RegexParser<'a> {
             Some(b't') => Ok(b'\t'),
             Some(b'r') => Ok(b'\r'),
             Some(b'a') => Ok(0x07),
+            Some(b'b') => Ok(0x08),
             Some(b'f') => Ok(0x0C),
             Some(b'v') => Ok(0x0B),
-            Some(b'0') => self.parse_octal(),
+            Some(b @ b'0'..=b'7') => self.parse_octal_from(b),
             Some(b'x') => self.parse_hex(),
             // Escaped special characters — literal
             Some(b) if b"()[]{}*+?.|^$\\/\"".contains(&b) => Ok(b),
@@ -390,10 +391,11 @@ impl<'a> RegexParser<'a> {
         }
     }
 
-    /// Parse octal digits after '\0'
-    fn parse_octal(&mut self) -> Result<u8, LexError> {
-        let mut val: u32 = 0;
-        for _ in 0..3 {
+    /// Parse octal digits; `first` is the initial octal digit already consumed.
+    fn parse_octal_from(&mut self, first: u8) -> Result<u8, LexError> {
+        let mut val: u32 = (first - b'0') as u32;
+        // We've consumed one digit already, read up to 2 more
+        for _ in 0..2 {
             match self.peek() {
                 Some(b) if (b'0'..=b'7').contains(&b) => {
                     self.advance();
@@ -588,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_parse_octal_escape() {
-        match p("\\0101") {
+        match p("\\101") {
             Regex::Literal(b'A') => {} // 0o101 = 65 = 'A'
             other => panic!("expected Literal('A'), got {:?}", other),
         }

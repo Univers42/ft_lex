@@ -210,7 +210,8 @@ impl NfaBuilder {
             }
 
             Regex::Anchor(Anchor::Start) => {
-                // ^ — match newline (simulated as: transition on '\n')
+                // ^ — BOL anchor: handled at parser/emitter level via rule.bol_anchor flag
+                // In the NFA, just produce an epsilon transition (always passes)
                 let start = self.new_state();
                 let end = self.new_state();
                 self.add_epsilon(start, end);
@@ -218,10 +219,11 @@ impl NfaBuilder {
             }
 
             Regex::Anchor(Anchor::End) => {
-                // $ — match newline at end
+                // $ — EOL anchor: handled at parser/emitter level via rule.eol_anchor flag
+                // In the NFA, just produce an epsilon transition (always passes)
                 let start = self.new_state();
                 let end = self.new_state();
-                self.add_transition(start, b'\n', end);
+                self.add_epsilon(start, end);
                 NfaFragment { start, end }
             }
 

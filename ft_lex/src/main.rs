@@ -80,23 +80,39 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     }
 
     if opts.input_file.is_empty() {
-        return Err("no input file specified".to_string());
+        // POSIX: read from stdin if no operand is given
+        opts.input_file = "-".to_string();
     }
 
     Ok(opts)
 }
 
 fn run(opts: &Options) -> Result<(), String> {
-    // 1. Read the .l file
-    let source = fs::read_to_string(&opts.input_file)
-        .map_err(|e| format!("{}: {}", opts.input_file, e))?;
+    // 1. Read the .l file (from file or stdin)
+    let source = if opts.input_file == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("<stdin>: {}", e))?;
+        buf
+    } else {
+        fs::read_to_string(&opts.input_file)
+            .map_err(|e| format!("{}: {}", opts.input_file, e))?
+    };
+
+    let filename = if opts.input_file == "-" {
+        "<stdin>"
+    } else {
+        &opts.input_file
+    };
 
     // 2. Parse the .l file
-    let lex_file = LexFile::parse(&source, &opts.input_file)
+    let lex_file = LexFile::parse(&source, filename)
         .map_err(|e| e.to_string())?;
 
     if lex_file.rules.is_empty() {
-        return Err(format!("{}: no rules defined", opts.input_file));
+        return Err(format!("{}: no rules defined", filename));
     }
 
     // 3. Build NFA
@@ -158,11 +174,7 @@ fn run(opts: &Options) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if args.is_empty() {
-        print_usage();
-        process::exit(1);
-    }
-
+    // POSIX: if no args, read from stdin (parse_args handles empty input_file)
     let opts = match parse_args(&args) {
         Ok(o) => o,
         Err(e) => {

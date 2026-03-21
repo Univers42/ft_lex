@@ -1,7 +1,7 @@
 // Full .l file parser — logic is in lexer.rs, this module
 // provides the high-level API that combines parsing + regex compilation.
 
-use crate::error::{LexError, LexErrorKind};
+use crate::error::LexError;
 use crate::lex_file::lexer::{self, RawLexFile};
 use crate::regex::ast::Regex;
 use crate::regex::parser::parse_regex;
@@ -32,6 +32,10 @@ pub struct Rule {
     pub priority: usize,
     /// Source line number in the .l file.
     pub line: usize,
+    /// Whether this rule is anchored to beginning-of-line (^).
+    pub bol_anchor: bool,
+    /// Whether this rule is anchored to end-of-line ($).
+    pub eol_anchor: bool,
 }
 
 /// Options parsed from %option directives.
@@ -58,12 +62,8 @@ fn compile_lex_file(raw: RawLexFile, filename: &str) -> Result<LexFile, LexError
             "noyywrap" => options.noyywrap = true,
             "yylineno" => options.yylineno = true,
             _ => {
-                return Err(LexError::new(
-                    filename,
-                    0,
-                    0,
-                    LexErrorKind::InvalidOption(opt.clone()),
-                ));
+                // Unknown options: silently ignore per POSIX unspecified behavior
+                // (program must not crash)
             }
         }
     }
@@ -78,8 +78,20 @@ fn compile_lex_file(raw: RawLexFile, filename: &str) -> Result<LexFile, LexError
             raw_rule.line,
         )?;
 
-        // Parse the regex
-        let regex = parse_regex(expanded.as_bytes(), filename, raw_rule.line)?;
+        // Detect and strip ^ (BOL) and $ (EOL) anchors
+        let mut pattern_to_parse = expanded.as_str();
+        let bol_anchor = pattern_to_parse.starts_with('^');
+        if bol_anchor {
+            pattern_to_parse = &pattern_to_parse[1..];
+        }
+        let eol_anchor = pattern_to_parse.ends_with('$')
+            && !pattern_to_parse.ends_with("\\$");
+        if eol_anchor {
+            pattern_to_parse = &pattern_to_parse[..pattern_to_parse.len() - 1];
+        }
+
+        // Parse the regex (without anchors — they are handled at runtime)
+        let regex = parse_regex(pattern_to_parse.as_bytes(), filename, raw_rule.line)?;
 
         rules.push(Rule {
             pattern_str: raw_rule.pattern.clone(),
@@ -87,6 +99,8 @@ fn compile_lex_file(raw: RawLexFile, filename: &str) -> Result<LexFile, LexError
             action: raw_rule.action.clone(),
             priority: i,
             line: raw_rule.line,
+            bol_anchor,
+            eol_anchor,
         });
     }
 
