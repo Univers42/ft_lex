@@ -177,6 +177,8 @@ impl CodeEmitter for CEmitter {
         writeln!(out, "static int yy_at_bol = 1;  /* BOL flag: 1 at start of line */").unwrap();
         writeln!(out, "static int yy_more_flag = 0;").unwrap();
         writeln!(out, "static int yy_more_len = 0;").unwrap();
+        writeln!(out, "static char yy_held_char = 0;").unwrap();
+        writeln!(out, "static int yy_held_pos = -1;").unwrap();
         writeln!(out).unwrap();
         writeln!(out, "char *yytext = NULL;").unwrap();
         writeln!(out, "int yyleng = 0;").unwrap();
@@ -286,6 +288,10 @@ impl CodeEmitter for CEmitter {
 
         // Main scanner loop
         writeln!(out, "    for (;;) {{").unwrap();
+
+        // Restore held character from previous return
+        writeln!(out, "        if (yy_held_pos >= 0) {{ yy_buf[yy_held_pos] = yy_held_char; yy_held_pos = -1; }}").unwrap();
+        writeln!(out).unwrap();
 
         // Buffer refill with proper boundary handling
         writeln!(out, "        /* Refill buffer if needed, preserving partial match data */").unwrap();
@@ -397,9 +403,11 @@ impl CodeEmitter for CEmitter {
         writeln!(out, "        if (yyleng > 0) yy_at_bol = (yytext[yyleng - 1] == '\\n');").unwrap();
         writeln!(out).unwrap();
 
-        // Null-terminate yytext temporarily
+        // Null-terminate yytext temporarily (hold for restore on next call)
         writeln!(out, "        yy_save = yytext[yyleng];").unwrap();
         writeln!(out, "        yytext[yyleng] = '\\0';").unwrap();
+        writeln!(out, "        yy_held_char = yy_save;").unwrap();
+        writeln!(out, "        yy_held_pos = (int)(yytext - yy_buf) + yyleng;").unwrap();
 
         // Switch on accepting rule
         writeln!(out, "        switch (yy_accept[yy_last_accept_state]) {{").unwrap();
@@ -457,6 +465,7 @@ impl CodeEmitter for CEmitter {
         writeln!(out, "            default: break;").unwrap();
         writeln!(out, "        }}").unwrap();
         writeln!(out, "        yytext[yyleng] = yy_save;").unwrap();
+        writeln!(out, "        yy_held_pos = -1;").unwrap();
         writeln!(out, "    }}").unwrap();
         writeln!(out, "}}").unwrap();
         writeln!(out).unwrap();
